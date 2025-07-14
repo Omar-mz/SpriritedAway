@@ -2,15 +2,16 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
-import Navbar from "@/components/navbar"
+import { Providers } from "@/components/providers"
+import { Toaster } from "sonner"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "SPIRITEDAWAY - Expérience Immersive",
+  title: "EduBoard - Learning Management System",
   description:
-    "Embarquez pour un voyage sensoriel unique avec SPIRITEDAWAY, des événements immersifs qui transcendent les limites de la réalité.",
-    generator: 'v0.dev'
+    "Comprehensive Learning Management System with course management, quizzes, forums, certification, and analytics.",
+  generator: 'EduBoard LMS v1.0'
 }
 
 export default function RootLayout({
@@ -19,10 +20,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="fr">
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <Navbar />
-        {children}
+        <Providers>
+          {children}
+          <Toaster richColors position="top-right" />
+        </Providers>
       </body>
     </html>
   )
