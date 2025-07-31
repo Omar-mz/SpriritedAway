@@ -1,114 +1,86 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { z } from 'zod'
+import bcrypt from 'bcryptjs'
 import connectDB from '@/lib/mongodb'
-import User, { UserRole, AccountStatus } from '@/lib/models/User'
-import { sendEmailVerification } from '@/lib/auth/email'
-import { withRateLimit } from '@/lib/auth/middleware'
+import User from '@/models/User'
+import { sendVerificationEmail } from '@/lib/email'
+import { z } from 'zod'
 
-// Registration schema validation
 const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-  firstName: z.string().min(1, 'First name is required').max(50, 'First name is too long'),
-  lastName: z.string().min(1, 'Last name is required').max(50, 'Last name is too long'),
-  confirmPassword: z.string(),
-}).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
-  path: ["confirmPassword"],
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  firstName: z.string().min(1, 'First name is required'),
+  lastName: z.string().min(1, 'Last name is required'),
+  username: z.string().min(3, 'Username must be at least 3 characters'),
 })
 
-// POST /api/auth/register
-async function registerHandler(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    await connectDB()
     
-    // Validate request body
-    const validationResult = registerSchema.safeParse(body)
-    if (!validationResult.success) {
+    const body = await request.json()
+    const validatedData = registerSchema.parse(body)
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [
+        { email: validatedData.email.toLowerCase() },
+        { username: validatedData.username }
+      ]
+    })
+    
+    if (existingUser) {
       return NextResponse.json(
         { 
-          error: 'Validation failed',
-          details: validationResult.error.errors.map(err => ({
-            field: err.path.join('.'),
-            message: err.message
-          }))
+          message: existingUser.email === validatedData.email.toLowerCase() 
+            ? 'Email already registered' 
+            : 'Username already taken'
         },
         { status: 400 }
       )
     }
     
-    const { email, password, firstName, lastName } = validationResult.data
-    
-    // Connect to database
-    await connectDB()
-    
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: email.toLowerCase() })
-    if (existingUser) {
-      return NextResponse.json(
-        { error: 'User with this email already exists' },
-        { status: 409 }
-      )
-    }
-    
     // Create new user
     const user = new User({
-      email: email.toLowerCase(),
-      password,
-      firstName,
-      lastName,
-      role: UserRole.USER,
-      status: AccountStatus.PENDING,
+      email: validatedData.email.toLowerCase(),
+      password: validatedData.password,
+      firstName: validatedData.firstName,
+      lastName: validatedData.lastName,
+      username: validatedData.username,
+      role: 'user'
     })
     
-    // Generate email verification token
-    const verificationToken = user.generateEmailVerificationToken()
-    
-    // Save user to database
+    // Generate verification token
+    const verificationToken = user.generateVerificationToken()
     await user.save()
     
     // Send verification email
-    const emailSent = await sendEmailVerification(user, verificationToken)
-    
-    if (!emailSent) {
-      console.error('Failed to send verification email for user:', user.email)
-      // Don't fail registration if email fails, just log it
+    try {
+      await sendVerificationEmail(user.email, verificationToken, user.firstName)
+    } catch (emailError) {
+      console.error('Failed to send verification email:', emailError)
+      // Continue with registration even if email fails
     }
     
-    // Return success response (without sensitive data)
     return NextResponse.json(
-      {
-        message: 'Registration successful! Please check your email to verify your account.',
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          status: user.status,
-          emailVerified: user.emailVerified,
-        }
+      { 
+        message: 'Registration successful. Please check your email to verify your account.',
+        userId: user._id
       },
       { status: 201 }
     )
     
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { message: 'Validation error', errors: error.errors },
+        { status: 400 }
+      )
+    }
+    
     console.error('Registration error:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { message: 'Internal server error' },
       { status: 500 }
     )
   }
-}
-
-// Apply rate limiting to registration endpoint
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  return withRateLimit(
-    request,
-    {
-      maxRequests: 5, // 5 registration attempts
-      windowMs: 15 * 60 * 1000, // per 15 minutes
-      message: 'Too many registration attempts. Please try again later.',
-    },
-    registerHandler
-  )
 }
